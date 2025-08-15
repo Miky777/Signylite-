@@ -1,208 +1,302 @@
-// pages/index.js
-import { useState, useRef } from "react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { useState, useMemo } from "react";
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 export default function Home() {
-  const fileRef = useRef(null);
+  const [file, setFile] = useState(null);
+  const [sig, setSig] = useState("John");
+  const [pageNum, setPageNum] = useState(1);
+  const [size, setSize] = useState(18);
+  const [posX, setPosX] = useState(50);
+  const [posY, setPosY] = useState(50);
+  const [hex, setHex] = useState("#1d4ed8"); // bleu
+  const [fontName, setFontName] = useState("Helvetica");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
 
-  const [pdfFile, setPdfFile] = useState(null);
-  const [signature, setSignature] = useState("");
-  const [pageNumber, setPageNumber] = useState(1);
-  const [fontSize, setFontSize] = useState(18);
-  const [x, setX] = useState(50);   // position X en points
-  const [y, setY] = useState(50);   // position Y en points
-  const [hexColor, setHexColor] = useState("#1f6feb");
-  const [status, setStatus] = useState("Choisis un PDF, écris ta signature puis clique sur Signer.");
+  const canSign = useMemo(() => !!file && sig.trim().length > 0, [file, sig]);
 
-  function hexToRgb01(hex) {
-    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    if (!m) return rgb(0, 0, 0);
-    return rgb(parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255);
+  function hexToRgb(h) {
+    const clean = h.replace("#", "");
+    const num = parseInt(clean.length === 3
+      ? clean.split("").map(c => c + c).join("")
+      : clean, 16);
+    return {
+      r: ((num >> 16) & 255) / 255,
+      g: ((num >> 8) & 255) / 255,
+      b: (num & 255) / 255,
+    };
   }
 
   async function handleSign() {
     try {
-      if (!pdfFile) return setStatus("⚠️ Sélectionne un fichier PDF.");
-      if (!signature.trim()) return setStatus("⚠️ Écris ta signature (texte).");
+      setBusy(true);
+      setMsg("Génération du PDF…");
 
-      setStatus("Chargement du PDF…");
-
-      const arrayBuffer = await pdfFile.arrayBuffer();
+      const arrayBuffer = await file.arrayBuffer();
       const pdfDoc = await PDFDocument.load(arrayBuffer);
 
-      const pageIdx = Math.min(Math.max(1, Number(pageNumber) || 1), pdfDoc.getPageCount()) - 1;
-      const page = pdfDoc.getPage(pageIdx);
+      const targetIndex = Math.max(0, Math.min(pdfDoc.getPageCount() - 1, pageNum - 1));
+      const page = pdfDoc.getPage(targetIndex);
 
-      const font = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
-      const color = hexToRgb01(hexColor);
+      // Polices standard
+      const fontMap = {
+        Helvetica: StandardFonts.Helvetica,
+        Times: StandardFonts.TimesRoman,
+        Courier: StandardFonts.Courier,
+      };
+      const selected = fontMap[fontName] || StandardFonts.Helvetica;
+      const font = await pdfDoc.embedFont(selected);
 
-      // Dessine le texte (signature) à la position choisie
-      page.drawText(signature, {
-        x: Number(x),
-        y: Number(y),
-        size: Number(fontSize),
+      // Couleur
+      const { r, g, b } = hexToRgb(hex);
+
+      // IMPORTANT : PDF = origine en bas-gauche
+      // Ici posX/posY sont depuis le coin inférieur gauche (cohérent avec pdf-lib)
+      page.drawText(sig, {
+        x: Number(posX),
+        y: Number(posY),
+        size: Number(size),
         font,
-        color,
+        color: rgb(r, g, b),
       });
 
-      const pdfBytes = await pdfDoc.save();
-      const blob = new Blob([pdfBytes], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
+      const out = await pdfDoc.save();
+      const blob = new Blob([out], { type: "application/pdf" });
 
-      // Téléchargement
       const a = document.createElement("a");
-      a.href = url;
+      a.href = URL.createObjectURL(blob);
       a.download = "document-signe.pdf";
-      document.body.appendChild(a);
       a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(a.href);
 
-      setStatus("✅ PDF signé téléchargé !");
+      setMsg("✅ PDF signé téléchargé.");
     } catch (e) {
       console.error(e);
-      setStatus("❌ Erreur lors de la signature du PDF.");
+      setMsg("❌ Erreur : impossible de signer ce PDF.");
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMsg(""), 3000);
     }
   }
 
-  // Quelques positions rapides (utile mobile)
-  async function quickPlace(pos) {
-    if (!pdfFile) return setStatus("Choisis d'abord un PDF.");
-    const arrayBuffer = await pdfFile.arrayBuffer();
-    const pdfDoc = await PDFDocument.load(arrayBuffer);
-    const page = pdfDoc.getPage(Math.min(Math.max(1, Number(pageNumber) || 1), pdfDoc.getPageCount()) - 1);
-    const { width, height } = page.getSize();
-
-    const margin = 36; // 0.5 inch
-    if (pos === "bottom-left") { setX(margin); setY(margin); }
-    if (pos === "bottom-right") { setX(width - 200); setY(margin); } // 200 ≈ largeur estimée
-    if (pos === "top-left") { setX(margin); setY(height - 50); }
-    if (pos === "top-right") { setX(width - 200); setY(height - 50); }
-    setStatus("Position rapide appliquée.");
+  function presetCorner(where) {
+    // Petits presets rapides
+    if (where === "bl") { setPosX(50); setPosY(50); }
+    if (where === "br") { setPosX(400); setPosY(50); }
+    if (where === "tl") { setPosX(50); setPosY(700); }
+    if (where === "tr") { setPosX(400); setPosY(700); }
   }
 
   return (
-    <div style={{ maxWidth: 720, margin: "20px auto", padding: "0 16px", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 8 }}>Signylite — Signature PDF</h1>
-      <p style={{ color: "#555", marginTop: 0 }}>
-        Choisis un PDF, tape ta signature (texte), place-la, puis télécharge le PDF signé. Tout se fait dans ton navigateur.
-      </p>
+    <main className="app">
+      <section className="card">
+        <header className="head">
+          <div className="logo-dot" aria-hidden />
+          <h1>Signylite — Signature PDF</h1>
+          <p className="sub">
+            Choisis un PDF, tape ta signature (texte), place-la, puis télécharge le PDF signé.
+            Tout se fait dans ton navigateur.
+          </p>
+        </header>
 
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-        <label style={{ display: "block" }}>
-          <strong>Fichier PDF</strong>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
-            style={{ display: "block", marginTop: 6 }}
-          />
-        </label>
-
-        <label style={{ display: "block" }}>
-          <strong>Signature (texte)</strong>
-          <input
-            value={signature}
-            onChange={(e) => setSignature(e.target.value)}
-            placeholder="Ex: Jean Dupont"
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-          />
-        </label>
-
-        <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
-          <label>
-            <strong>Page</strong>
+        <div className="grid">
+          <div className="group">
+            <label className="label">Fichier PDF</label>
             <input
-              type="number"
-              min={1}
-              value={pageNumber}
-              onChange={(e) => setPageNumber(e.target.value)}
-              style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="file"
             />
-          </label>
+            {!file && <p className="hint">Aucun fichier sélectionné.</p>}
+          </div>
 
-          <label>
-            <strong>Taille (px)</strong>
+          <div className="group">
+            <label className="label">Signature (texte)</label>
             <input
-              type="range"
-              min={10}
-              max={48}
-              value={fontSize}
-              onChange={(e) => setFontSize(Number(e.target.value))}
-              style={{ width: "100%" }}
+              type="text"
+              value={sig}
+              onChange={(e) => setSig(e.target.value)}
+              placeholder="Ex : Jean Dupont"
+              className="input"
             />
-            <div style={{ fontSize: 12, color: "#666" }}>{fontSize}px</div>
-          </label>
+          </div>
+
+          <div className="row">
+            <div className="group small">
+              <label className="label">Page</label>
+              <input
+                type="number"
+                min="1"
+                value={pageNum}
+                onChange={(e) => setPageNum(Number(e.target.value))}
+                className="input"
+              />
+            </div>
+
+            <div className="group grow">
+              <label className="label">Taille (px) — {size}px</label>
+              <input
+                type="range"
+                min="10"
+                max="64"
+                value={size}
+                onChange={(e) => setSize(Number(e.target.value))}
+                className="range"
+              />
+            </div>
+          </div>
+
+          <div className="row">
+            <div className="group grow">
+              <label className="label">Position X — {posX}px</label>
+              <input
+                type="range"
+                min="0"
+                max="500"
+                value={posX}
+                onChange={(e) => setPosX(Number(e.target.value))}
+                className="range"
+              />
+            </div>
+
+            <div className="group grow">
+              <label className="label">Position Y — {posY}px</label>
+              <input
+                type="range"
+                min="0"
+                max="800"
+                value={posY}
+                onChange={(e) => setPosY(Number(e.target.value))}
+                className="range"
+              />
+            </div>
+          </div>
+
+          <div className="row">
+            <div className="group">
+              <label className="label">Couleur</label>
+              <div className="row">
+                <input
+                  type="color"
+                  value={hex}
+                  onChange={(e) => setHex(e.target.value)}
+                  aria-label="Couleur"
+                  className="color"
+                />
+                <div className="chips">
+                  {["#1d4ed8", "#111827", "#dc2626", "#059669"].map((c) => (
+                    <button
+                      key={c}
+                      className="chip"
+                      style={{ background: c }}
+                      onClick={() => setHex(c)}
+                      title={c}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="group">
+              <label className="label">Police</label>
+              <div className="segmented">
+                {["Helvetica", "Times", "Courier"].map((f) => (
+                  <button
+                    key={f}
+                    className={`seg ${fontName === f ? "active" : ""}`}
+                    onClick={() => setFontName(f)}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="group">
+            <label className="label">Presets rapides</label>
+            <div className="row wrap">
+              <button className="btn ghost" onClick={() => presetCorner("bl")}>Bas gauche</button>
+              <button className="btn ghost" onClick={() => presetCorner("br")}>Bas droite</button>
+              <button className="btn ghost" onClick={() => presetCorner("tl")}>Haut gauche</button>
+              <button className="btn ghost" onClick={() => presetCorner("tr")}>Haut droite</button>
+            </div>
+            <p className="hint">
+              Astuce : dans un PDF, l’origine (0,0) est en <b>bas-gauche</b>. Augmente Y pour monter.
+            </p>
+          </div>
         </div>
 
-        <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
-          <label>
-            <strong>Position X</strong>
-            <input
-              type="range"
-              min={0}
-              max={600}
-              value={x}
-              onChange={(e) => setX(Number(e.target.value))}
-              style={{ width: "100%" }}
-            />
-            <div style={{ fontSize: 12, color: "#666" }}>{x}px</div>
-          </label>
-
-          <label>
-            <strong>Position Y</strong>
-            <input
-              type="range"
-              min={0}
-              max={800}
-              value={y}
-              onChange={(e) => setY(Number(e.target.value))}
-              style={{ width: "100%" }}
-            />
-            <div style={{ fontSize: 12, color: "#666" }}>{y}px</div>
-          </label>
+        <div className="actions">
+          <button
+            className="btn primary"
+            onClick={handleSign}
+            disabled={!canSign || busy}
+          >
+            {busy ? "Signature…" : "Signer et télécharger"}
+          </button>
+          {msg && <div className="toast">{msg}</div>}
         </div>
+      </section>
 
-        <label style={{ display: "block" }}>
-          <strong>Couleur</strong>
-          <input
-            type="color"
-            value={hexColor}
-            onChange={(e) => setHexColor(e.target.value)}
-            style={{ width: 60, height: 36, padding: 0, border: "none", background: "transparent" }}
-          />
-        </label>
+      {/* Styles minimalistes (aucune dépendance) */}
+      <style jsx global>{`
+        :root {
+          --bg: #0b0d12;
+          --card: #0f1522;
+          --muted: #8b93a7;
+          --text: #e7ecf5;
+          --border: #1f2a44;
+          --accent: #2563eb;
+          --accent-2: #1d4ed8;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: var(--bg); color: var(--text); }
+        .app { min-height: 100vh; display: grid; place-items: start center; padding: 40px 16px; }
+        .card { width: 100%; max-width: 880px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+        .head { display: grid; gap: 8px; margin-bottom: 18px; }
+        .logo-dot { width: 14px; height: 14px; border-radius: 50%; background: linear-gradient(135deg, #6ee7f9, #7c3aed); }
+        h1 { font-size: 28px; letter-spacing: .2px; margin: 0; }
+        .sub { margin: 0; color: var(--muted); }
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => quickPlace("bottom-left")} style={btnStyle}>Bas gauche</button>
-          <button onClick={() => quickPlace("bottom-right")} style={btnStyle}>Bas droite</button>
-          <button onClick={() => quickPlace("top-left")} style={btnStyle}>Haut gauche</button>
-          <button onClick={() => quickPlace("top-right")} style={btnStyle}>Haut droite</button>
-        </div>
+        .grid { display: grid; gap: 16px; }
+        .row { display: flex; gap: 12px; align-items: center; }
+        .row.wrap { flex-wrap: wrap; }
+        .group { display: grid; gap: 8px; }
+        .group.small { width: 120px; }
+        .group.grow { flex: 1; }
+        .label { color: #aab2c5; font-size: 13px; }
+        .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
 
-        <button onClick={handleSign} style={{ ...btnStyle, background: "#0ea5e9" }}>
-          Signer et télécharger
-        </button>
+        .file, .input, .range {
+          width: 100%; padding: 12px 12px; background: #0b1120; border: 1px solid var(--border);
+          border-radius: 10px; color: var(--text); outline: none;
+        }
+        .input::placeholder { color: #5f6b85; }
 
-        <div style={{ padding: 12, background: "#f6f8fa", borderRadius: 8, color: "#333" }}>
-          {status}
-        </div>
+        .color { width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 10px; background: #0b1120; padding: 0; }
+        .chips { display: flex; gap: 8px; margin-left: 12px; }
+        .chip { width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; }
 
-        <p style={{ fontSize: 12, color: "#999", textAlign: "center", marginTop: 20 }}>
-          © {new Date().getFullYear()} Signylite — Prototype
-        </p>
-      </div>
-    </div>
+        .segmented { display: inline-flex; background: #0b1120; border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 4px; }
+        .seg { padding: 8px 12px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; }
+        .seg.active { background: #111a2e; border-color: var(--border); }
+
+        .btn { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: #0b1120; color: var(--text); cursor: pointer; }
+        .btn:hover { background: #0e1528; }
+        .btn.ghost { background: #0b1120; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+        .btn.primary:disabled { opacity: .6; cursor: not-allowed; }
+
+        .actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+        .toast { font-size: 14px; color: #cde3ff; }
+
+        @media (max-width: 640px) {
+          .card { padding: 16px; }
+          h1 { font-size: 22px; }
+        }
+      `}</style>
+    </main>
   );
 }
-
-const btnStyle = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #ddd",
-  background: "#111827",
-  color: "#fff",
-  fontWeight: 600,
-  cursor: "pointer",
-};
